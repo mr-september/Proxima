@@ -32,6 +32,21 @@ class BrowserManager {
                 url: 'https://gemini.google.com/app',
                 partition: 'persist:gemini',
                 color: '#4285f4'
+            },
+            zai: {
+                url: 'https://chat.z.ai/',
+                partition: 'persist:zai',
+                color: '#2b6cff'
+            },
+            kimi: {
+                url: 'https://www.kimi.com/',
+                partition: 'persist:kimi',
+                color: '#ff5c39'
+            },
+            deepseek: {
+                url: 'https://chat.deepseek.com/',
+                partition: 'persist:deepseek',
+                color: '#4d6bfe'
             }
         };
 
@@ -398,7 +413,7 @@ class BrowserManager {
         };
 
         view.webContents.on('will-navigate', (event, url) => {
-            if (isAuthUrl(url)) {
+            if (isAuthUrl(url) && this._usesPopupAuth(provider)) {
                 console.log(`[${provider}] Intercepting navigation to auth URL:`, url.substring(0, 80));
                 event.preventDefault();
                 this.openAuthPopup(provider, url);
@@ -406,7 +421,7 @@ class BrowserManager {
         });
 
         view.webContents.on('will-redirect', (event, url) => {
-            if (isAuthUrl(url)) {
+            if (isAuthUrl(url) && this._usesPopupAuth(provider)) {
                 console.log(`[${provider}] Intercepting redirect to auth URL:`, url.substring(0, 80));
                 event.preventDefault();
                 this.openAuthPopup(provider, url);
@@ -448,7 +463,7 @@ class BrowserManager {
                 lowerUrl.includes('/signin') ||
                 lowerUrl.includes('/oauth');
 
-            if (isAuthPopup) {
+            if (isAuthPopup && this._usesPopupAuth(provider)) {
                 this.openAuthPopup(provider, url);
                 return { action: 'deny' };
             }
@@ -529,6 +544,16 @@ class BrowserManager {
         view.webContents.loadURL(config.url);
 
         return view;
+    }
+
+    // Only the 4 built-in providers need Proxima's detached Google-OAuth popup:
+    // Google blocks embedded-browser login, so the standard flow requires the
+    // Firefox-UA popup. Z.ai/Kimi/DeepSeek must authenticate natively in their
+    // own persistent partition (where the site writes its session itself) — the
+    // popup hijack breaks their handoff. Returning false lets their in-page
+    // login run untouched.
+    _usesPopupAuth(provider) {
+        return ['perplexity', 'chatgpt', 'claude', 'gemini'].includes(provider);
     }
 
     openAuthPopup(provider, url) {
@@ -707,6 +732,16 @@ class BrowserManager {
             view.setAutoResize({ width: true, height: true });
 
             this.activeProvider = provider;
+
+            // Emit the live URL immediately so the address bar reflects the
+            // newly-shown provider on tab switch (instead of showing the
+            // previous view's stale last URL until the next navigation).
+            try {
+                if (!view.webContents.isDestroyed() && this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    const liveUrl = view.webContents.getURL();
+                    this.mainWindow.webContents.send('provider-navigated', { provider, url: liveUrl });
+                }
+            } catch (e) { /* ignore */ }
         } catch (e) {
             console.log('Could not show view:', e.message);
         }
@@ -799,6 +834,22 @@ class BrowserManager {
                             const hasSignIn = !!document.querySelector('a[href*="ServiceLogin"]') ||
                                             !!document.querySelector('a[data-action-id="sign-in"]');
                             return hasInput && !hasSignIn;
+                        })()
+                    `);
+                case 'zai':
+                case 'kimi':
+                case 'deepseek':
+                    return await webContents.executeJavaScript(`
+                        (function() {
+                            const input = !!document.querySelector('textarea, [contenteditable="true"], div[role="textbox"]');
+                            const loginBtns = Array.from(document.querySelectorAll('button, a'));
+                            const hasLogin = loginBtns.some(b => {
+                                const t = (b.innerText || '').trim().toLowerCase();
+                                return t === 'log in' || t === 'sign up' || t === 'login' || t === 'sign in' || t === '注册' || t === '登录';
+                            });
+                            const p = window.location.pathname.toLowerCase();
+                            const onAuthPage = p.includes('/login') || p.includes('/signin') || p.includes('/auth') || p.includes('/oauth');
+                            return input && !hasLogin && !onAuthPage;
                         })()
                     `);
                 default:

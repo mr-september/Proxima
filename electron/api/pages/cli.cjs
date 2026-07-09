@@ -113,6 +113,9 @@ proxima ask claude "Explain quantum computing"
 proxima ask chatgpt "Write a poem about AI"
 proxima ask gemini "Summarize this topic"
 proxima ask perplexity "Latest news on AI"
+proxima ask zai "Explain this code"
+proxima ask kimi "Draft a research plan"
+proxima ask deepseek "Solve this math problem"
 
 # Auto-pick best available
 proxima ask "Hello"

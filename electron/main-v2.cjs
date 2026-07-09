@@ -99,7 +99,10 @@ const defaultSettings = {
         perplexity: { enabled: true, loggedIn: false },
         chatgpt: { enabled: true, loggedIn: false },
         claude: { enabled: true, loggedIn: false },
-        gemini: { enabled: true, loggedIn: false }
+        gemini: { enabled: true, loggedIn: false },
+        zai: { enabled: true, loggedIn: false },
+        kimi: { enabled: true, loggedIn: false },
+        deepseek: { enabled: true, loggedIn: false }
     },
     ipcPort: 19222,
     theme: 'dark',
