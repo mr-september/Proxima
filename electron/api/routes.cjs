@@ -17,6 +17,9 @@ function createRouteHandler(deps) {
 
     return async function handleRoute(method, pathname, body, res) {
         const handleMCPRequest = getHandler();
+        if (method === 'POST' && pathname === `${API_PREFIX}/chat/completions`) {
+            console.log('[ROUTES-ENTRY] raw body.model=' + JSON.stringify(body && body.model));
+        }
         const conversationId = (body && (body.conversationId || body.conversation_id || body.sessionId || body.session_id)) || null;
 
         if (method === 'POST' && pathname === `${API_PREFIX}/chat/completions`) {
@@ -34,6 +37,7 @@ function createRouteHandler(deps) {
             }
 
             const resolved = resolveModels(modelInput, body._byokKey);
+            console.log('[ROUTES-DEBUG] modelInput=' + modelInput + ' resolved.mode=' + resolved.mode + ' providers=' + JSON.stringify(resolved.providers) + ' effort=' + resolved.effort);
             if (resolved.mode === 'error') return sendError(res, 404, resolved.error, 'model_not_found');
 
             const wantStream = body.stream === true;
@@ -73,7 +77,7 @@ function createRouteHandler(deps) {
                             };
                         }
 
-                        const result = await queryProvider(r.providers[0], prompt, filePath, runGemini, onChunk, conversationId, body._byokKey, null, r.byokModelId);
+                        const result = await queryProvider(body.model, prompt, filePath, runGemini, onChunk, conversationId, body._byokKey, null, r.byokModelId);
 
                         if (wantStream) {
                             if (r.providers[0] !== 'gemini') {
@@ -298,7 +302,7 @@ function createRouteHandler(deps) {
                         };
                     }
 
-                    const result = await queryProvider(provider, inputMessage, filePath, gemini, onChunk, conversationId, body._byokKey, null, resolved.byokModelId);
+                    const result = await queryProvider(body.model || provider, inputMessage, filePath, gemini, onChunk, conversationId, body._byokKey, null, resolved.byokModelId);
 
                     if (wantStream) {
                         if (provider !== 'gemini') {

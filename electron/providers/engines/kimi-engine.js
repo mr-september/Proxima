@@ -98,8 +98,62 @@
         return last;
     }
 
-    async function send(message, conversationId) {
+    // --- Model / thinking-effort selection (commit #2) ---
+    // Kimi fuses effort into the model name (K2.6 Instant / K2.6 Thinking /
+    // K2.6 Agent / K2.6 Agent Swarm). The request "model" may be e.g.
+    // "k2.6-thinking" or "k2.6-instant" or just "k2.6". We open .current-model
+    // and click the .model-item whose text matches the requested variant.
+    function _kimiVariant(model) {
+        var m = String(model || '').toLowerCase();
+        if (/thinking/.test(m)) return 'thinking';
+        if (/agent/.test(m)) return 'agent';
+        if (/instant|fast|quick/.test(m)) return 'instant';
+        // bare "k2.6" -> default (instant) unless effort says otherwise
+        return 'instant';
+    }
+
+    async function _selectModel(model, effort) {
+        try {
+            var variant = _kimiVariant(model);
+            // If effort explicitly given, it can override the model-derived variant.
+            if (effort) {
+                var e = String(effort).toLowerCase();
+                if (/think/.test(e)) variant = 'thinking';
+                else if (/agent/.test(e)) variant = 'agent';
+                else if (/instant|off|none|fast/.test(e)) variant = 'instant';
+            }
+            var cur = document.querySelector('.current-model');
+            if (!cur) { console.log('[Kimi] model selector not found'); return; }
+            cur.click();
+            await new Promise(function (r) { setTimeout(r, 400); });
+            var items = document.querySelectorAll('.model-item');
+            var hit = null;
+            for (var i = 0; i < items.length; i++) {
+                var txt = (items[i].textContent || '').toLowerCase();
+                if (variant === 'thinking' && /thinking/.test(txt)) { hit = items[i]; break; }
+                if (variant === 'agent' && /agent/.test(txt)) { hit = items[i]; break; }
+                if (variant === 'instant' && /instant/.test(txt) && !/thinking|agent/.test(txt)) { hit = items[i]; break; }
+            }
+            if (hit) {
+                // Click the inner .model-item-content or the item itself.
+                hit.click();
+                console.log('[Kimi] selected variant: ' + variant);
+            } else {
+                console.log('[Kimi] model variant not found: ' + variant + ' (using default)');
+            }
+            await new Promise(function (r) { setTimeout(r, 250); });
+        } catch (e) {
+            console.log('[Kimi] _selectModel error: ' + e.message);
+        }
+    }
+
+    async function send(message, engine, effort, conversationId) {
         activateSession(conversationId);
+
+        // Apply model + thinking-effort selection BEFORE composing.
+        // For Kimi the "model" string encodes the variant (e.g. k2.6-thinking).
+        if (engine && engine !== 'auto') await _selectModel(engine, effort);
+        else if (effort) await _selectModel('k2.6', effort);
 
         var composer = _findComposer();
         if (!composer) throw new Error('Kimi: composer element not found (page not ready?)');

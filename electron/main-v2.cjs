@@ -100,8 +100,8 @@ const defaultSettings = {
         chatgpt: { enabled: true, loggedIn: false },
         claude: { enabled: true, loggedIn: false },
         gemini: { enabled: true, loggedIn: false },
-        zai: { enabled: true, loggedIn: false },
-        kimi: { enabled: true, loggedIn: false },
+        zai: { enabled: true, loggedIn: false, model: null, effort: null },
+        kimi: { enabled: true, loggedIn: false, model: null, effort: null },
         deepseek: { enabled: true, loggedIn: false }
     },
     ipcPort: 19222,

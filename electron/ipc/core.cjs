@@ -161,6 +161,76 @@ ipcMain.handle('open-in-system-browser', (event, provider) => {
     return { success: false, error: 'Unknown provider' };
 });
 
+    // === TEMPORARY DIAGNOSTIC PROBE (commit #2 DOM recon) ===
+    // Env-gated: only active when PROXIMA_DIAG=1. After providers initialize,
+    // dumps the live Z.ai + Kimi model/thinking DOM to JSON files so we can
+    // write resilient engine selectors without manual DevTools. Self-removing
+    // once commit #2 is implemented — do NOT ship this to upstream.
+    if (process.env.PROXIMA_DIAG === '1') {
+        const fs = require('fs');
+        const path = require('path');
+        // SEND + CAPTURE: type a message, click send, wait, then report the
+        // DOM path of the answer region so we can write a correct selector.
+        const reconZai = `
+            (async function () {
+                var out = { url: location.href };
+                try {
+                    var ta = document.getElementById('chat-input');
+                    if (!ta) { out.err = 'no chat-input'; return out; }
+                    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+                    setter.call(ta, 'Reply with exactly the word PONG and nothing else.');
+                    ta.dispatchEvent(new Event('input', { bubbles: true }));
+                    await new Promise(r => setTimeout(r, 400));
+                    out.sendDisabled = (document.getElementById('send-message-button')||{}).disabled;
+                    var sendBtn = document.getElementById('send-message-button');
+                    if (sendBtn) sendBtn.click();
+                    // wait for a response to render (LLM can be slow)
+                    await new Promise(r => setTimeout(r, 15000));
+                    // Capture bubble classes present AFTER send.
+                    out.bubbleClasses = [];
+                    var all = document.querySelectorAll('div, section, article, li');
+                    for (var i = 0; i < all.length && out.bubbleClasses.length < 40; i++) {
+                        var cl = (all[i].className && all[i].className.toString ? all[i].className.toString() : '');
+                        if (/message|bubble|chat|conversation|turn|assistant|user|reply|response|role-|markdown|prose/i.test(cl)) {
+                            out.bubbleClasses.push(cl.slice(0, 80));
+                        }
+                    }
+                    // Find the last substantial text block and its chain.
+                    var blocks = document.querySelectorAll('p, div, pre, li, span');
+                    var best = null, bestLen = 0;
+                    for (var j = 0; j < blocks.length; j++) {
+                        var t = (blocks[j].textContent || '').trim();
+                        if (t.length > bestLen) { bestLen = t.length; best = blocks[j]; }
+                    }
+                    if (best) {
+                        var chain = []; var n = best;
+                        for (var c = 0; c < 7 && n; c++) { chain.push((n.tagName||'') + '.' + (n.className && n.className.toString ? n.className.toString().slice(0,70) : '') + (n.id ? '#'+n.id : '')); n = n.parentElement; }
+                        out.answerText = best.textContent.trim().slice(0, 120);
+                        out.answerChain = chain;
+                    }
+                    out.bodyLen = (document.body.innerText||'').length;
+                } catch (e) { out.err = e.message; }
+                return out;
+            })()
+        `;
+        const tick = async () => {
+            try {
+                fs.writeFileSync(path.join(__dirname, '..', '..', 'diag_marker.txt'), 'tick-started');
+                const ready = browserManager.getWebContents('zai') && !browserManager.getWebContents('zai').isDestroyed();
+                if (!ready) { setTimeout(tick, 2000); return; }
+                const wc = browserManager.getWebContents('zai');
+                await new Promise(r => setTimeout(r, 5000));
+                const report = await wc.executeJavaScript(reconZai).catch(e => ({ err: e.message }));
+                const file = path.join(__dirname, '..', '..', 'diag_dom_zai.json');
+                fs.writeFileSync(file, JSON.stringify(report, null, 2));
+                console.log('[DIAG] wrote ' + file);
+            } catch (e) {
+                console.log('[DIAG] probe failed:', e.message);
+            }
+        };
+        setTimeout(tick, 18000);
+    }
+    // === END TEMPORARY DIAGNOSTIC PROBE ===
 }
 
 module.exports = { registerCoreHandlers };

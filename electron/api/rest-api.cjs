@@ -270,7 +270,7 @@ function resolveModels(modelField, byokKey = null) {
     const enabled = getEnabled();
 
     function _parseResolved(resolvedStr) {
-        let baseProvider, gemini = null, byokModelId = null;
+        let baseProvider, gemini = null, byokModelId = null, effort = null;
 
         if (resolvedStr.includes('@')) {
             const atIdx = resolvedStr.indexOf('@');
@@ -280,9 +280,12 @@ function resolveModels(modelField, byokKey = null) {
             const parts = resolvedStr.split(':');
             baseProvider = parts[0];
             gemini = parts[1] || null;
+            // parts[2] is the thinking-effort suffix used by the browser
+            // providers (zai:kimi/deepseek) — e.g. "zai:glm-4.7:thinking".
+            effort = parts[2] || null;
         }
 
-        return { baseProvider, gemini, byokModelId };
+        return { baseProvider, gemini, byokModelId, effort };
     }
 
     if (Array.isArray(modelField)) {
@@ -319,7 +322,7 @@ function resolveModels(modelField, byokKey = null) {
     }
     const parsed = _parseResolved(resolved);
     if (enabled.includes(parsed.baseProvider) || (byokKey && byok.keys.VALID_PROVIDERS.includes(parsed.baseProvider))) {
-        return { mode: 'single', providers: [parsed.baseProvider], gemini: parsed.gemini, geminis: [parsed.gemini], byokModelId: parsed.byokModelId, byokModelIds: [parsed.byokModelId] };
+        return { mode: 'single', providers: [parsed.baseProvider], gemini: parsed.gemini, geminis: [parsed.gemini], byokModelId: parsed.byokModelId, byokModelIds: [parsed.byokModelId], effort: parsed.effort };
     }
     return { mode: 'error', providers: [], error: `"${modelField}" not available. Enabled: ${enabled.join(', ')}` };
 }
@@ -363,6 +366,7 @@ function extractMessage(body) {
 }
 
 async function queryProvider(provider, messageOrMessages, filePath = null, gemini = null, onChunk = null, conversationId = null, byokKey = null, tools = null, byokModelId = null) {
+    console.log('[QUERY-ENTRY] provider=' + provider);
     const effectiveKey = byokKey || (byok.keys.isEnabled() ? byok.keys.getKey(provider) : null);
     if (effectiveKey) {
         initProviderStats(provider);
@@ -400,6 +404,7 @@ async function queryProvider(provider, messageOrMessages, filePath = null, gemin
     }
 
     initProviderStats(provider); const start = Date.now();
+    console.log('[QUERY-DEBUG] provider=' + provider + ' hasByokKey=' + !!effectiveKey);
     try {
         const sendResult = await handleMCPRequest({ action: 'sendMessage', provider, data: { message: messageOrMessages, filePath, gemini, onChunk, conversationId } });
         if (!sendResult.success) throw new Error(sendResult.error || `Failed to send to ${provider}`);

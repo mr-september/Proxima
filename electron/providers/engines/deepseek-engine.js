@@ -99,8 +99,18 @@
         return last;
     }
 
-    async function send(message, conversationId) {
+    // DeepSeek requires login to render its chat UI, so model/effort selection
+    // is a documented no-op. The routing (deepseek:r1) is parsed by api.cjs but
+    // cannot be applied in the embedded browser. See vault note.
+    async function _selectModel(model, effort) {
+        console.log('[DeepSeek] model/effort selection is not supported (provider requires login). model=' + model + ' effort=' + effort);
+    }
+
+    async function send(message, engine, effort, conversationId) {
         activateSession(conversationId);
+
+        // No-op: DeepSeek is unusable in Proxima's embedded browser (login wall).
+        if (engine && engine !== 'auto') await _selectModel(engine, effort);
 
         var composer = _findComposer();
         if (!composer) throw new Error('DeepSeek: composer element not found (page not ready?)');

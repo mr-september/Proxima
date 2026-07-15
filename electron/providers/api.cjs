@@ -129,13 +129,18 @@ async function ensureAPI(provider, webContents) {
 }
 
 async function sendViaAPI(provider, webContents, message, attachments = null, onChunk = null, conversationId = null) {
+    // Convention: "provider:model:effort" (model and effort optional).
+    // e.g. "zai:glm-4.7:thinking", "kimi:k2.6-thinking", "deepseek:r1".
     let baseProvider = provider;
     let engine = 'auto';
+    let effort = null;
     if (provider.indexOf(':') !== -1) {
         const parts = provider.split(':');
         baseProvider = parts[0];
-        engine = parts[1];
+        engine = parts[1] || 'auto';
+        effort = parts[2] || null; // 'thinking' | 'deepthink' | 'off' | etc.
     }
+    console.log(`[SENDVIAPI-DEBUG] provider=${provider} base=${baseProvider} engine=${engine} effort=${effort}`);
 
     const ready = await ensureAPI(baseProvider, webContents);
     if (!ready) {
@@ -165,9 +170,12 @@ async function sendViaAPI(provider, webContents, message, attachments = null, on
         let executeStr;
         if (baseProvider === 'gemini' || baseProvider === 'chatgpt' || baseProvider === 'perplexity' || baseProvider === 'claude') {
             const escapedAttachments = attachments ? JSON.stringify(attachments) : 'null';
-            executeStr = `window.${apiObj}.send(${escapedMessage}, ${JSON.stringify(engine)}, ${escapedAttachments}, ${JSON.stringify(conversationId)})`;
+            // Built-in engines: send(message, engine, attachments, sessionId).
+            // We pass effort as a 5th arg (ignored by current built-ins, future-proof).
+            executeStr = `window.${apiObj}.send(${escapedMessage}, ${JSON.stringify(engine)}, ${escapedAttachments}, ${JSON.stringify(conversationId)}, ${JSON.stringify(effort)})`;
         } else {
-            executeStr = `window.${apiObj}.send(${escapedMessage}, ${JSON.stringify(conversationId)})`;
+            // Our 3 engines (zai/kimi/deepseek): send(message, engine, effort, conversationId).
+            executeStr = `window.${apiObj}.send(${escapedMessage}, ${JSON.stringify(engine)}, ${JSON.stringify(effort)}, ${JSON.stringify(conversationId)})`;
         }
 
         if (onChunk && baseProvider === 'gemini') {

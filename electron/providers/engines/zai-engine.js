@@ -8,7 +8,7 @@
 (function () {
     if (window.__proximaZai) return;
 
-    var TIMEOUT = 360000;
+    var TIMEOUT = 120000;
 
     var _currentSessionId = null;
     var _sessions = {};
@@ -31,9 +31,12 @@
 
     function _sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-    // Heuristic DOM locators — kept resilient to minor markup changes.
+    // Heuristic DOM locators — Z.ai specific (chat.z.ai).
     function _findComposer() {
-        // Prefer a contenteditable or textarea acting as the message box.
+        // Z.ai uses a real <textarea id="chat-input">.
+        var ta = document.getElementById('chat-input');
+        if (ta && ta.offsetParent !== null) return ta;
+        // Fallback: any visible textarea/contenteditable.
         var els = document.querySelectorAll('textarea, [contenteditable="true"], div[role="textbox"]');
         for (var i = 0; i < els.length; i++) {
             var el = els[i];
@@ -44,28 +47,31 @@
     }
 
     function _findSendButton() {
+        // Z.ai send button is a fixed ID with an icon (no text).
+        var byId = document.getElementById('send-message-button');
+        if (byId && !byId.disabled && byId.offsetParent !== null) return byId;
+        // Fallback: button whose class hints at send.
         var candidates = document.querySelectorAll('button');
         for (var i = 0; i < candidates.length; i++) {
             var b = candidates[i];
             if (b.disabled) continue;
+            var cls = (b.className || '').toLowerCase();
             var txt = (b.textContent || '').trim().toLowerCase();
             var aria = (b.getAttribute('aria-label') || '').toLowerCase();
-            if (/send|发送|submit/.test(txt + ' ' + aria)) return b;
-        }
-        // Fallback: a button with an icon inside the composer region.
-        var comp = _findComposer();
-        if (comp) {
-            var scope = comp.closest('form') || comp.parentElement;
-            var btns = scope ? scope.querySelectorAll('button') : [];
-            for (var j = 0; j < btns.length; j++) {
-                if (!btns[j].disabled && btns[j].offsetParent !== null) return btns[j];
-            }
+            if (/send|发送|submit|sendmessagebutton/.test(cls + ' ' + txt + ' ' + aria)) return b;
         }
         return null;
     }
 
     function _findResponseContainer() {
-        // The main conversation/article region.
+        // Z.ai renders assistant turns in elements with class "chat-assistant"
+        // (plus a Svelte hash). Prefer the LAST such element.
+        var bubbles = document.querySelectorAll('[class*="chat-assistant"]');
+        if (bubbles && bubbles.length) return bubbles[bubbles.length - 1];
+        // Fallback: the markdown-prose inside the last chat-assistant.
+        var prose = document.querySelectorAll('.markdown-prose');
+        if (prose && prose.length) return prose[prose.length - 1];
+        // Generic fallbacks.
         var cand = document.querySelector('main, article, [role="log"], .conversation, #chat, .chat-container');
         return cand || document.body;
     }
@@ -73,7 +79,10 @@
     function _extractLatestAnswer() {
         var root = _findResponseContainer();
         if (!root) return '';
-        // Grab the last substantial text block (assistant turn).
+        // If we landed on the assistant bubble, its direct text is the answer.
+        var direct = (root.textContent || '').trim();
+        if (direct.length > 0) return direct;
+        // Otherwise grab the last substantial text block within it.
         var blocks = root.querySelectorAll('p, div, pre, li, span');
         var best = '';
         for (var i = 0; i < blocks.length; i++) {
@@ -103,10 +112,72 @@
         return last; // return best-effort even if not fully stable
     }
 
-    async function send(message, conversationId) {
+    // --- Model / thinking-effort selection (commit #2) ---
+    // Z.ai model menu: click .modelSelectorButton, then click the
+    // BUTTON[aria-label="model-item"][data-value="<model>"] option.
+    function _normalizeModelId(m) {
+        // Accept "glm-4.7" or "glm4.7" or "glm-4.7-air" etc.
+        return String(m || '').trim().toLowerCase();
+    }
+
+    async function _selectModel(model) {
+        try {
+            var wanted = _normalizeModelId(model);
+            var btn = document.querySelector('.modelSelectorButton');
+            if (!btn) { console.log('[Z.ai] model button not found'); return; }
+            btn.click();
+            // Menu renders in a Svelte portal; wait for it then match.
+            await new Promise(function (r) { setTimeout(r, 400); });
+            var opts = document.querySelectorAll('button[aria-label="model-item"]');
+            var hit = null;
+            for (var i = 0; i < opts.length; i++) {
+                var dv = (opts[i].getAttribute('data-value') || '').toLowerCase();
+                var txt = (opts[i].textContent || '').toLowerCase();
+                if (dv === wanted || txt.indexOf(wanted) !== -1) { hit = opts[i]; break; }
+            }
+            if (hit) { hit.click(); console.log('[Z.ai] selected model: ' + wanted); }
+            else { console.log('[Z.ai] model not found: ' + wanted + ' (using default)'); }
+            await new Promise(function (r) { setTimeout(r, 250); }); // let menu close
+        } catch (e) {
+            console.log('[Z.ai] _selectModel error: ' + e.message);
+        }
+    }
+
+    async function _selectEffort(effort) {
+        try {
+            var e = String(effort || '').trim().toLowerCase();
+            if (!e || e === 'off' || e === 'none') { /* fall through to toggle-off below */ }
+            var controls = document.querySelectorAll('[role="button"], button');
+            var target = null;
+            for (var i = 0; i < controls.length; i++) {
+                var t = (controls[i].textContent || '').trim().toLowerCase();
+                if (/deep think/.test(t)) {
+                    if (e === 'deepthink' && /max/.test(t)) { target = controls[i]; break; }
+                    if (e === 'thinking' && !/max/.test(t)) { target = controls[i]; break; }
+                    if (e === 'off' && /deep think/.test(t)) { target = controls[i]; break; }
+                }
+            }
+            if (target) { target.click(); console.log('[Z.ai] effort set: ' + e); }
+            else { console.log('[Z.ai] effort control not found: ' + e); }
+            await new Promise(function (r) { setTimeout(r, 200); });
+        } catch (err) {
+            console.log('[Z.ai] _selectEffort error: ' + err.message);
+        }
+    }
+
+    async function send(message, engine, effort, conversationId) {
+        console.log('[Z.ai][send] START engine=' + engine + ' effort=' + effort + ' conv=' + conversationId);
+        var _diag = { start: Date.now(), engine: engine, effort: effort };
+        try {
         activateSession(conversationId);
 
+        // Apply model + thinking-effort selection BEFORE composing.
+        if (engine && engine !== 'auto') await _selectModel(engine);
+        if (effort) await _selectEffort(effort);
+        _diag.afterSelect = Date.now();
+
         var composer = _findComposer();
+        _diag.composerFound = !!composer;
         if (!composer) throw new Error('Z.ai: composer element not found (page not ready?)');
 
         // Support both contenteditable and textarea inputs.
@@ -134,9 +205,17 @@
         }
 
         var answer = await _waitForStableAnswer(TIMEOUT);
+        _diag.answerLen = (answer || '').length;
+        _diag.answerHead = (answer || '').slice(0, 200);
         saveSession(conversationId);
+        window.__zaiDiag = _diag;
         if (!answer || answer.length === 0) throw new Error('Z.ai returned empty response');
         return answer;
+        } catch (e) {
+            _diag.error = e.message;
+            window.__zaiDiag = _diag;
+            throw e;
+        }
     }
 
     function newConversation(sessionId) {
