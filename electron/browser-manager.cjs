@@ -435,12 +435,31 @@ class BrowserManager {
 
         view.webContents.on('did-navigate', (event, url) => {
             console.log(`[${provider}] Navigated to:`, url.substring(0, 80));
+            // SPA-based providers transition from landing page to chat after login.
+            // Clear engine flag so it re-injects into the chat view's DOM.
+            if (['zai', 'kimi', 'deepseek'].includes(provider)) {
+                try {
+                    var flag = '__proxima' + provider.charAt(0).toUpperCase() + provider.slice(1);
+                    view.webContents.executeJavaScript(
+                        'try{window[' + JSON.stringify(flag) + ']=undefined}catch(e){}'
+                    ).catch(() => {});
+                } catch (e) {}
+            }
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('provider-navigated', { provider, url });
             }
         });
 
         view.webContents.on('did-navigate-in-page', (event, url) => {
+            // SPA navigation — same re-injection requirement
+            if (['zai', 'kimi', 'deepseek'].includes(provider)) {
+                try {
+                    var flag = '__proxima' + provider.charAt(0).toUpperCase() + provider.slice(1);
+                    view.webContents.executeJavaScript(
+                        'try{window[' + JSON.stringify(flag) + ']=undefined}catch(e){}'
+                    ).catch(() => {});
+                } catch (e) {}
+            }
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('provider-navigated', { provider, url });
             }

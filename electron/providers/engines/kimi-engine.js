@@ -61,9 +61,28 @@
         return null;
     }
 
+    function _isCssContent(text) {
+        if (!text || text.length < 5) return false;
+        var t = text.trim();
+        return /^@(property|keyframes|import|media)/.test(t) ||
+               /^[.#@a-zA-Z-]+\s*\{/.test(t.slice(0, 50)) ||
+               /syntax:|initial-value:|inherits:|transform-box:|@keyframes/.test(t.slice(0, 100));
+    }
+
     function _findResponseContainer() {
         var cand = document.querySelector('main, article, [role="log"], .conversation, #chat, .chat-container');
-        return cand || document.body;
+        if (cand && !_isCssContent(cand.textContent || '')) return cand;
+        // Kimi conversation messages may use class patterns with "message"
+        var msgs = document.querySelectorAll('[class*="message"]');
+        if (msgs && msgs.length > 0) {
+            for (var i = msgs.length - 1; i >= 0; i--) {
+                var txt = (msgs[i].textContent || '').trim();
+                if (txt.length > 0 && !_isCssContent(txt) && txt.indexOf('Thinking...') === -1) return msgs[i];
+            }
+        }
+        // Don't fall through to document.body — it contains CSS animation content.
+        // Instead return null; _extractLatestAnswer will return '' and polling continues.
+        return null;
     }
 
     function _extractLatestAnswer() {
@@ -73,7 +92,7 @@
         var best = '';
         for (var i = 0; i < blocks.length; i++) {
             var t = (blocks[i].textContent || '').trim();
-            if (t.length > best.length) best = t;
+            if (t.length > best.length && !_isCssContent(t)) best = t;
         }
         return best;
     }

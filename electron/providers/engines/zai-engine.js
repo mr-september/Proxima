@@ -71,22 +71,42 @@
         // Fallback: the markdown-prose inside the last chat-assistant.
         var prose = document.querySelectorAll('.markdown-prose');
         if (prose && prose.length) return prose[prose.length - 1];
+        // Try any element with "message" in class (Z.ai Svelte convention)
+        var msgs = document.querySelectorAll('[class*="message"]');
+        if (msgs && msgs.length > 0) {
+            for (var i = msgs.length - 1; i >= 0; i--) {
+                var txt = (msgs[i].textContent || '').trim();
+                if (txt.length > 0 && txt.indexOf('Thinking...') === -1) return msgs[i];
+            }
+            return msgs[msgs.length - 1];
+        }
         // Generic fallbacks.
         var cand = document.querySelector('main, article, [role="log"], .conversation, #chat, .chat-container');
         return cand || document.body;
+    }
+
+    function _stripThinkingPrefix(text) {
+        if (!text) return '';
+        var cleaned = text.trim();
+        // Strip "Thought Process" thinking section (Z.ai prepends this before answers)
+        var tpMatch = cleaned.match(/^Thought\s+Process[\s\S]*?(?=\n\s*\n|[A-Z])/);
+        if (tpMatch) cleaned = cleaned.substring(tpMatch[0].length).trim();
+        // Also strip "Thinking..." placeholders
+        cleaned = cleaned.replace(/^Thinking\.\.\.\s*/i, '').trim();
+        return cleaned;
     }
 
     function _extractLatestAnswer() {
         var root = _findResponseContainer();
         if (!root) return '';
         // If we landed on the assistant bubble, its direct text is the answer.
-        var direct = (root.textContent || '').trim();
+        var direct = _stripThinkingPrefix(root.textContent || '');
         if (direct.length > 0) return direct;
         // Otherwise grab the last substantial text block within it.
         var blocks = root.querySelectorAll('p, div, pre, li, span');
         var best = '';
         for (var i = 0; i < blocks.length; i++) {
-            var t = (blocks[i].textContent || '').trim();
+            var t = _stripThinkingPrefix(blocks[i].textContent || '');
             if (t.length > best.length) best = t;
         }
         return best;
