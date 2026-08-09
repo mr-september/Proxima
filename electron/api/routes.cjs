@@ -534,7 +534,22 @@ function createRouteHandler(deps) {
             catch (e) { return sendError(res, 500, e.message); }
         }
 
-        if (method === 'GET' && (pathname === `${API_PREFIX}/openapi.json` || pathname === '/openapi.json')) {
+        if (method === 'POST' && pathname === `${API_PREFIX}/settings/headless`) {
+            const enabled = body && body.enabled;
+            if (typeof enabled !== 'boolean') return sendError(res, 400, '"enabled" must be a boolean');
+            try {
+                const r = await handleMCPRequest({ action: 'setHeadlessMode', data: { enabled } });
+                return sendJSON(res, 200, { success: true, headlessMode: enabled, result: r });
+            } catch (e) { return sendError(res, 500, e.message); }
+        }
+
+if (method === 'GET' && pathname === `${API_PREFIX}/settings/headless`) {
+            try {
+                const r = await handleMCPRequest({ action: 'isWindowVisible', data: {} });
+                return sendJSON(res, 200, { success: true, windowVisible: !!(r && r.visible) });
+            } catch (e) { return sendError(res, 500, e.message); }
+        }
+if (method === 'GET' && (pathname === `${API_PREFIX}/openapi.json` || pathname === '/openapi.json')) {
             try { return sendJSON(res, 200, JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'docs', 'openapi.json'), 'utf8'))); }
             catch (e) { return sendError(res, 500, 'OpenAPI spec not found'); }
         }

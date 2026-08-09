@@ -574,7 +574,7 @@ function startRestAPI() {
         }
 
         const url = new URL(req.url, `http://localhost:${REST_PORT}`);
-        const publicPaths = ['/', '/docs', '/cli', '/ws', '/websocket', '/openapi.json', '/v1/openapi.json', '/api-key', '/v1/byok/models', '/v1/models', '/v1/stats', '/v1/functions', '/v1/health', '/v1/health/deep'];
+        const publicPaths = ['/', '/docs', '/cli', '/ws', '/websocket', '/openapi.json', '/v1/openapi.json', '/api-key', '/v1/byok/models', '/v1/models', '/v1/stats', '/v1/functions', '/v1/health', '/v1/health/deep', '/v1/settings/headless'];
         if (!publicPaths.includes(url.pathname) && !validateApiKey(req)) {
             return sendError(res, 401, 'Invalid or missing API key', 'authentication_error');
         }
