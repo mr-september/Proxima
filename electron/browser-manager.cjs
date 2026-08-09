@@ -258,7 +258,64 @@ class BrowserManager {
                         }
                     } catch(e) {}
 
-                    console.log('[Compat] v4.1 active');
+                                        // ── Canvas 2D fingerprinting ──────────────────────────────────────────
+                    // Spoof canvas.toDataURL with consistent noise so the output doesn't
+                    // match known headless renderer fingerprints.
+                    try {
+                        const origGetContext = HTMLCanvasElement.prototype.getContext;
+                        HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+                            const ctx = origGetContext.call(this, type, attrs);
+                            if (ctx && (type === "2d" || type === "webgl" || type === "webgl2")) {
+                                const origFillText = ctx.fillText;
+                                ctx.fillText = function() {
+                                    if (!this._canvasNoiseDone) {
+                                        this._canvasNoiseDone = true;
+                                        const r = 0.0002;
+                                        arguments[1] = (arguments[1] || 0) + r;
+                                        arguments[2] = (arguments[2] || 0) + r;
+                                    }
+                                    return origFillText.apply(this, arguments);
+                                };
+                            }
+                            return ctx;
+                        };
+                    } catch(e) {}
+
+                    // ── AudioContext fingerprinting ──────────────────────────────────────
+                    try {
+                        const origGetByteFrequencyData = AnalyserNode.prototype.getByteFrequencyData;
+                        AnalyserNode.prototype.getByteFrequencyData = function(array) {
+                            origGetByteFrequencyData.call(this, array);
+                            if (array && array.length > 4) {
+                                array[0] = Math.max(array[0], 32);
+                                array[1] = Math.max(array[1], 16);
+                                array[2] = Math.max(array[2], 8);
+                                array[3] = Math.max(array[3], 4);
+                                array[4] = Math.max(array[4], 2);
+                            }
+                        };
+                    } catch(e) {}
+
+                    // ── WebRTC IP leak mitigation ───────────────────────────────────────
+                    try {
+                        const origPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+                        if (origPC) {
+                            const OrigConstructor = origPC;
+                            window.RTCPeerConnection = function(config) {
+                                const restricted = Object.assign({}, config || {}, {
+                                    iceTransportPolicy: 'relay',
+                                    iceCandidatePoolSize: 0
+                                });
+                                return new OrigConstructor(restricted);
+                            };
+                            window.RTCPeerConnection.prototype = OrigConstructor.prototype;
+                            if (window.webkitRTCPeerConnection) {
+                                window.webkitRTCPeerConnection = window.RTCPeerConnection;
+                            }
+                        }
+                    } catch(e) {}
+
+                    console.log('[Compat] v4.2 active (canvas/audio/webrtc)');;
                 } catch(e) {
                     console.log('[Compat] Error:', e.message);
                 }
