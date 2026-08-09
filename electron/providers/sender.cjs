@@ -5,6 +5,19 @@ let browserManager, providerAPI;
 function init(d) { browserManager = d.browserManager; providerAPI = d.providerAPI; }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
+// ── Stochastic pacing ──────────────────────────────────────────────────
+// Adds a configurable random delay before each query so traffic patterns
+// look human-adjacent rather than burst-bot.  Accepts env var override
+// PROXIMA_PACING_MIN / PROXIMA_PACING_MAX (milliseconds).  Set both to 0
+// to disable.
+const _PACING_MIN = Math.max(0, parseInt(process.env.PROXIMA_PACING_MIN, 10) || 500);
+const _PACING_MAX = Math.max(0, parseInt(process.env.PROXIMA_PACING_MAX, 10) || 3000);
+function _stochasticPace() {
+    if (_PACING_MAX <= 0 || _PACING_MIN > _PACING_MAX) return Promise.resolve();
+    const delay = _PACING_MIN + Math.random() * (_PACING_MAX - _PACING_MIN);
+    return sleep(Math.round(delay));
+}
+
 // Chain sends to the same provider sequentially to prevent BrowserView execution collisions.
 const _sendQueues = {};
 
@@ -32,6 +45,9 @@ async function _sendMessageToProviderImpl(provider, message, attachments = null,
         }
         console.log(`[${baseProvider}] Provider ready after waiting for initialization.`);
     }
+
+    // Pace before hitting the provider engine to avoid burst patterns.
+    await _stochasticPace();
 
     const MAX_TRANSIENT_RETRIES = 2;
     const RETRY_DELAY_MS = 2000;
