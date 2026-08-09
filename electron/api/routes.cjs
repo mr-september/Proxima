@@ -331,6 +331,54 @@ function createRouteHandler(deps) {
             return;
         }
 
+        if (method === 'GET' && pathname === `${API_PREFIX}/health`) {
+            const enabled = getEnabled();
+            const uptime = `${Math.floor(process.uptime())}s`;
+            const stats = getFormattedStats();
+            return sendJSON(res, 200, {
+                status: 'ok',
+                version: VERSION || '5.0.0',
+                uptime,
+                providers: enabled.map(p => ({
+                    name: p,
+                    enabled: true,
+                    mode: 'session'
+                })),
+                stats: {
+                    totalRequests: stats.totalRequests || 0,
+                    totalErrors: stats.totalErrors || 0,
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        if (method === 'GET' && pathname === `${API_PREFIX}/health/deep`) {
+            const enabled = getEnabled();
+            const uptime = `${Math.floor(process.uptime())}s`;
+            const hMCP = handleMCPRequest;
+            const providerStatus = [];
+            for (const p of enabled) {
+                let loggedIn = false;
+                try {
+                    const r = await hMCP({ action: 'isLoggedIn', provider: p });
+                    loggedIn = !!(r && r.loggedIn);
+                } catch (e) { loggedIn = false; }
+                providerStatus.push({ name: p, enabled: true, loggedIn });
+            }
+            const stats = getFormattedStats();
+            return sendJSON(res, 200, {
+                status: 'ok',
+                version: VERSION || '5.0.0',
+                uptime,
+                providers: providerStatus,
+                stats: {
+                    totalRequests: stats.totalRequests || 0,
+                    totalErrors: stats.totalErrors || 0,
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+
         if (method === 'GET' && pathname === `${API_PREFIX}/models`) {
             const isByokMode = byok.keys.isEnabled();
             const enabled = getEnabled();
