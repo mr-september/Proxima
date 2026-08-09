@@ -9,6 +9,29 @@
 (function () {
     if (window.__proximaDeepseek) return;
 
+
+    // -- Engine diagnostics ---------------------------------------------
+    function _dumpDomState(context) {
+        var url = window.location.href;
+        var title = document.title;
+        var bodyClasses = document.body ? document.body.className.slice(0, 200) : "no-body";
+        var classSamples = [];
+        try {
+            var all = document.querySelectorAll("*");
+            var seen = new Set();
+            for (var i = 0; i < all.length && classSamples.length < 10; i++) {
+                var cls = all[i].className;
+                if (typeof cls === "string" && cls.trim()) {
+                    var first = cls.trim().split(/s+/)[0];
+                    if (!seen.has(first)) { seen.add(first); classSamples.push(first); }
+                }
+            }
+        } catch(e) {}
+        var diag = { context: context, url: url, title: title, bodyClasses: bodyClasses, classSamples: classSamples };
+        console.log("[DeepSeek][DOM] " + JSON.stringify(diag));
+        return diag;
+    }
+
     var TIMEOUT = 360000;
 
     var _currentSessionId = null;
@@ -64,7 +87,15 @@
 
     function _findResponseContainer() {
         var cand = document.querySelector('main, article, [role="log"], .conversation, #chat, .chat-container');
-        return cand || document.body;
+        if (cand && !_isCssContent(cand.textContent || '')) return cand;
+        var msgs = document.querySelectorAll('[class*="message"]');
+        if (msgs && msgs.length > 0) {
+            for (var i = msgs.length - 1; i >= 0; i--) {
+                var txt = (msgs[i].textContent || '').trim();
+                if (txt.length > 0 && !_isCssContent(txt)) return msgs[i];
+            }
+        }
+        return null;
     }
 
     function _extractLatestAnswer() {

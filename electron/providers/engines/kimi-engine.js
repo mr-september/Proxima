@@ -8,6 +8,31 @@
 (function () {
     if (window.__proximaKimi) return;
 
+    // ── Engine diagnostics ──────────────────────────────────────────────
+    // Logs actionable DOM state when the engine fails so debugging
+    // doesn't require opening DevTools on the provider's page.
+    function _dumpDomState(context) {
+        var url = window.location.href;
+        var title = document.title;
+        var bodyClasses = document.body ? document.body.className.slice(0, 200) : 'no-body';
+        // Sample some top-level class patterns that might be useful for selector debugging
+        var classSamples = [];
+        try {
+            var all = document.querySelectorAll('*');
+            var seen = new Set();
+            for (var i = 0; i < all.length && classSamples.length < 10; i++) {
+                var c = all[i].className;
+                if (typeof c === 'string' && c.trim()) {
+                    var first = c.trim().split(/\s+/)[0];
+                    if (!seen.has(first)) { seen.add(first); classSamples.push(first); }
+                }
+            }
+        } catch(e) {}
+        var diag = { context: context, url: url, title: title, bodyClasses: bodyClasses, classSamples: classSamples };
+        console.log('[' + 'Kimi' + '][DOM] ' + JSON.stringify(diag));
+        return diag;
+    }
+
     var TIMEOUT = 360000;
 
     var _currentSessionId = null;
@@ -114,6 +139,7 @@
             }
             await _sleep(600);
         }
+                if (!last || last.length === 0) _dumpDomState('Kimi: timed out empty');
         return last;
     }
 
