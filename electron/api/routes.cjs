@@ -534,7 +534,17 @@ function createRouteHandler(deps) {
             catch (e) { return sendError(res, 500, e.message); }
         }
 
-        if (method === 'POST' && pathname === `${API_PREFIX}/settings/headless`) {
+        if (method === 'POST' && pathname === `${API_PREFIX}/execute`) {
+            const provider = body && body.provider;
+            const script = body && body.script;
+            if (!provider) return sendError(res, 400, '"provider" is required');
+            if (!script) return sendError(res, 400, '"script" is required');
+            try {
+                const r = await handleMCPRequest({ action: 'executeScript', provider, data: { script } });
+                return sendJSON(res, 200, { success: true, provider, result: r });
+            } catch (e) { return sendError(res, 500, e.message); }
+        }
+if (method === 'POST' && pathname === `${API_PREFIX}/settings/headless`) {
             const enabled = body && body.enabled;
             if (typeof enabled !== 'boolean') return sendError(res, 400, '"enabled" must be a boolean');
             try {
