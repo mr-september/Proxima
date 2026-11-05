@@ -1000,47 +1000,6 @@
         return _parseResponse(rawText, true);
     }
 
-    // ── Model / effort selection (cosmetic — API-level model selection
-    //    is handled via workspaceId/profile in send(). This syncs the DOM
-    //    dropdown for visual consistency.)
-    function _normalizeModelId(m) {
-        return String(m || '').trim().toLowerCase();
-    }
-
-    async function _selectModel(model) {
-            try {
-                var wanted = _normalizeModelId(model);
-                var btn = document.querySelector('button[data-test-id="bard-mode-menu-button"]');
-                if (!btn) { console.log('[Gemini] model button not found'); return; }
-                // Angular needs PointerEvent to trigger overlay
-                btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-                btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                btn.click();
-                await new Promise(function (r) { setTimeout(r, 600); });
-                // Gemini uses custom <gem-menu-item> Angular elements
-                var opts = document.querySelectorAll('gem-menu-item[role="menuitem"]');
-                var hit = null;
-                for (var i = 0; i < opts.length; i++) {
-                    var txt = (opts[i].textContent || '').trim().toLowerCase();
-                    // Menu items have format: "3.5 Flash-Lite Fastest answers" — match prefix
-                    if (txt.indexOf(wanted) !== -1 || txt.indexOf(wanted.replace(/[^a-z0-9]/g,'')) !== -1) {
-                        hit = opts[i]; break;
-                    }
-                }
-                if (hit) {
-                    hit.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-                    hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                    hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                    hit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                    console.log('[Gemini] selected model: ' + wanted);
-                }
-                else { console.log('[Gemini] model not found: ' + wanted + ' (using default)'); }
-                await new Promise(function (r) { setTimeout(r, 250); });
-            } catch (e) {
-                console.log('[Gemini] _selectModel error: ' + e.message);
-            }
-        }
-
     async function send(message, engine, attachments, sessionId, _isRetry, options) {
         abortActive();
         if (typeof engine === 'object' && engine !== null) {
@@ -1448,7 +1407,7 @@
         console.log('[Proxima API] Conversation reset:', sessionId || 'default & mcp');
     }
 
-    window.__proximaGeminiUnified = { send: send, newConversation: newConversation, abort: abortActive, getAvailableModels: getAvailableModels, _selectModel: _selectModel, _normalizeModelId: _normalizeModelId };
+    window.__proximaGeminiUnified = { send: send, newConversation: newConversation, abort: abortActive, getAvailableModels: getAvailableModels };
     window.__proximaGemini = {
         send: function (msg, engine, attachments, sessionId, maybeForceOrOptions, maybeOptions) {
             var forceFresh = false;
