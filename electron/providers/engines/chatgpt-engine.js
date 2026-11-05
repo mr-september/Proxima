@@ -204,7 +204,7 @@
             var html = await fetch('/', { credentials: 'include' }).then(function (r) { return r.text(); });
             _cachedScripts = [];
             var m;
-            var re = /src="([^"]*)"/g;
+            var re = /src=\"([^\"]*)\"/g;
             while ((m = re.exec(html)) !== null) _cachedScripts.push(m[1]);
             var dplMatch = html.match(/dpl=([a-zA-Z0-9_-]+)/);
             _cachedDpl = dplMatch ? dplMatch[1] : '';
@@ -371,8 +371,65 @@
         return fileId;
     }
 
-    async function send(message, engine, attachments, sessionId) {
+    // ── Model / effort selection ──────────────────────────────────────────
+    // ChatGPT has no explicit model picker — model selection is abstracted
+    // behind "Chat" / "Work" mode tabs (role="radio").
+    // Effort is controlled by the .__composer-pill button (cycles High/Medium/Low).
+    function _normalizeModelId(m) {
+        return String(m || '').trim().toLowerCase();
+    }
+
+    async function _selectModel(model) {
+        try {
+            var wanted = _normalizeModelId(model);
+            // Map engine to Chat or Work mode
+            var isWork = /work|o1|o3|o4|o4?mini|pro/.test(wanted);
+            var targetText = isWork ? 'Work' : 'Chat';
+            var tabs = document.querySelectorAll('button[role="radio"]');
+            var hit = null;
+            for (var i = 0; i < tabs.length; i++) {
+                var txt = (tabs[i].textContent || '').trim();
+                if (txt === targetText) { hit = tabs[i]; break; }
+            }
+            if (hit) { hit.click(); console.log('[ChatGPT] selected mode: ' + targetText); }
+            else { console.log('[ChatGPT] mode tab not found: ' + targetText); }
+            await new Promise(function (r) { setTimeout(r, 300); });
+        } catch (e) {
+            console.log('[ChatGPT] _selectModel error: ' + e.message);
+        }
+    }
+
+    async function _selectEffort(effort) {
+        try {
+            var e = String(effort || '').trim().toLowerCase();
+            if (!e || e === 'off' || e === 'none') return;
+            // Click the composer-pill to toggle effort level (cycles through levels)
+            var pill = document.querySelector('.__composer-pill');
+            if (!pill) {
+                // Fallback: any button with "High" / "Medium" / "Low" text
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var txt = (btns[i].textContent || '').trim();
+                    if (txt === 'High' || txt === 'Medium' || txt === 'Low') {
+                        pill = btns[i];
+                        break;
+                    }
+                }
+            }
+            if (pill) { pill.click(); console.log('[ChatGPT] effort toggled: ' + e); }
+            else { console.log('[ChatGPT] effort pill not found'); }
+            await new Promise(function (r) { setTimeout(r, 200); });
+        } catch (err) {
+            console.log('[ChatGPT] _selectEffort error: ' + err.message);
+        }
+    }
+
+    async function send(message, engine, attachments, sessionId, effort) {
         activateSession(sessionId);
+
+        // Select model mode and effort before sending.
+        if (engine && engine !== 'auto') await _selectModel(engine);
+        if (effort) await _selectEffort(effort);
 
         var token = await _getToken();
 

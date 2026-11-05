@@ -298,9 +298,40 @@
         return s3ObjectUrl;
     }
 
-    async function send(message, engine, attachments, sessionId) {
+    // ── Model selection ──────────────────────────────────────────────────
+    // Perplexity model picker: button[aria-label="Model" i]
+    // Opens a dropdown; options unknown without login.
+    function _normalizeModelId(m) {
+        return String(m || '').trim().toLowerCase();
+    }
+
+    async function _selectModel(model) {
+        try {
+            var wanted = _normalizeModelId(model);
+            var btn = document.querySelector('button[aria-label="Model" i]');
+            if (!btn) { console.log('[Perplexity] model button not found'); return; }
+            btn.click();
+            await new Promise(function (r) { setTimeout(r, 500); });
+            var opts = document.querySelectorAll('[role="option"], [role="menuitem"], [class*="option"]');
+            var hit = null;
+            for (var i = 0; i < opts.length; i++) {
+                var txt = (opts[i].textContent || '').trim().toLowerCase();
+                if (txt.indexOf(wanted) !== -1) { hit = opts[i]; break; }
+            }
+            if (hit) { hit.click(); console.log('[Perplexity] selected model: ' + wanted); }
+            else { console.log('[Perplexity] model not found: ' + wanted + ' (using default)'); }
+            await new Promise(function (r) { setTimeout(r, 250); });
+        } catch (e) {
+            console.log('[Perplexity] _selectModel error: ' + e.message);
+        }
+    }
+
+    async function send(message, engine, attachments, sessionId, effort) {
         // Isolate this conversation's follow-up thread before building params.
         activateSession(sessionId);
+
+        // Select model from DOM dropdown.
+        if (engine && engine !== 'auto') await _selectModel(engine);
 
         var sessionToken = _getSessionToken();
         var frontendUuid = _uuid();
@@ -315,7 +346,7 @@
             sources: ['web'],
             frontend_uuid: frontendUuid,
             mode: 'copilot',
-            model_preference: 'turbo',
+            model_preference: engine || 'auto',
             is_related_query: false,
             is_sponsored: false,
             prompt_source: 'user',

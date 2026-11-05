@@ -166,8 +166,75 @@
         return data.file_uuid;
     }
 
-    async function send(message, engine, attachments, sessionId) {
+    // ── Model / effort selection ──────────────────────────────────────────
+    // Must run BEFORE _createConversation() since model is baked into the
+    // conversation on the server.
+    function _normalizeModelId(m) {
+        return String(m || '').trim().toLowerCase();
+    }
+
+    async function _selectModel(model) {
+        try {
+            var wanted = _normalizeModelId(model);
+            var btn = document.querySelector('button[aria-label^="Model:"]');
+            if (!btn) { console.log('[Claude] model button not found'); return; }
+            btn.click();
+            await new Promise(function (r) { setTimeout(r, 400); });
+            var opts = document.querySelectorAll('[role="option"]');
+            var hit = null;
+            for (var i = 0; i < opts.length; i++) {
+                var txt = (opts[i].textContent || '').trim().toLowerCase();
+                if (txt.indexOf(wanted) !== -1) { hit = opts[i]; break; }
+            }
+            // Fallback: depth-scan visible elements for model name
+            if (!hit) {
+                var all = document.querySelectorAll('div, span, [role="option"]');
+                var bestDepth = -1;
+                for (var i = 0; i < all.length; i++) {
+                    var txt = (all[i].textContent || '').trim().toLowerCase();
+                    if (txt === wanted || txt.indexOf(wanted) !== -1) {
+                        var depth = 0;
+                        var el = all[i];
+                        while (el.parentElement) { depth++; el = el.parentElement; }
+                        if (depth > bestDepth) { bestDepth = depth; hit = all[i]; }
+                    }
+                }
+            }
+            if (hit) { hit.click(); console.log('[Claude] selected model: ' + wanted); }
+            else { console.log('[Claude] model not found: ' + wanted + ' (using default)'); }
+            await new Promise(function (r) { setTimeout(r, 250); });
+        } catch (e) {
+            console.log('[Claude] _selectModel error: ' + e.message);
+        }
+    }
+
+    async function _selectEffort(effort) {
+        try {
+            var e = String(effort || '').trim().toLowerCase();
+            if (!e || e === 'off' || e === 'none') return;
+            var btn = document.querySelector('button[aria-label^="Model:"]');
+            if (!btn) return;
+            btn.click();
+            await new Promise(function (r) { setTimeout(r, 400); });
+            var opts = document.querySelectorAll('[role="option"]');
+            var hit = null;
+            for (var i = 0; i < opts.length; i++) {
+                var txt = (opts[i].textContent || '').trim();
+                if (txt.indexOf('EffortMax') !== -1) { hit = opts[i]; break; }
+            }
+            if (hit) { hit.click(); console.log('[Claude] effort set: ' + e); }
+            await new Promise(function (r) { setTimeout(r, 250); });
+        } catch (err) {
+            console.log('[Claude] _selectEffort error: ' + err.message);
+        }
+    }
+
+    async function send(message, engine, attachments, sessionId, effort) {
         activateSession(sessionId);
+
+        // Select model / thinking effort BEFORE conversation creation.
+        if (engine && engine !== 'auto') await _selectModel(engine);
+        if (effort) await _selectEffort(effort);
 
         var orgId = await _getOrgId();
 
