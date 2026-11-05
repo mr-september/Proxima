@@ -18,16 +18,15 @@ const { getCLIDocsPage } = require('./pages/cli.cjs');
 const { getWSDocsPage } = require('./pages/ws.cjs');
 
 const REST_PORT = parseInt(process.env.PROXIMA_REST_PORT) || 3210;
-const VERSION = '5.0.0';
+const VERSION = '5.5.0';
 const API_PREFIX = '/v1';
 
 const MODEL_ALIASES = {
-    'chatgpt': 'chatgpt', 'gpt': 'chatgpt', 'gpt-4': 'chatgpt', 'gpt-4o': 'chatgpt',
-    'gpt-4.5': 'chatgpt', 'openai': 'chatgpt',
-    'claude': 'claude', 'claude-3': 'claude', 'claude-3.5': 'claude', 'claude-4': 'claude',
-    'anthropic': 'claude', 'sonnet': 'claude', 'opus': 'claude', 'haiku': 'claude',
-    'gemini': 'gemini', 'gemini-pro': 'gemini', 'gemini-2': 'gemini', 'gemini-2.5': 'gemini',
-    'google': 'gemini', 'bard': 'gemini',
+    'chatgpt': 'chatgpt', 'chatgpt-latest': 'chatgpt', 'gpt': 'chatgpt', 'openai': 'chatgpt',
+    'chatgpt:auto': 'chatgpt:auto', 'chatgpt:thinking': 'chatgpt:thinking', 'chatgpt:reasoning': 'chatgpt:thinking',
+    'chatgpt:instant': 'chatgpt:instant', 'chatgpt:mini': 'chatgpt:mini',
+    'claude': 'claude', 'claude-latest': 'claude', 'anthropic': 'claude', 'sonnet': 'claude', 'opus': 'claude', 'haiku': 'claude',
+    'gemini': 'gemini', 'gemini-pro': 'gemini:pro', 'google': 'gemini', 'bard': 'gemini',
     'perplexity': 'perplexity', 'pplx': 'perplexity', 'sonar': 'perplexity',
     'zai': 'zai', 'chat.z.ai': 'zai', 'glm': 'zai',
     'kimi': 'kimi', 'moonshot': 'kimi',
@@ -43,9 +42,47 @@ const crypto = require('crypto');
 const _fs = require('fs');
 const _path = require('path');
 
+function getUserDataPath() {
+    if (process.env.PROXIMA_DATA_DIR) {
+        return process.env.PROXIMA_DATA_DIR;
+    }
+    try {
+        const { app } = require('electron');
+        if (app && app.getPath) return app.getPath('userData');
+    } catch {}
+    const os = require('os');
+    const home = process.env.HOME || os.homedir();
+    let base;
+    if (process.platform === 'win32') {
+        base = process.env.APPDATA || _path.join(home, 'AppData', 'Roaming');
+    } else if (process.platform === 'darwin') {
+        base = _path.join(home, 'Library', 'Application Support');
+    } else {
+        base = process.env.XDG_CONFIG_HOME || _path.join(home, '.config');
+    }
+    const packagedDir = _path.join(base, 'Proxima');
+    const devDir = _path.join(base, 'proxima');
+    try {
+        if (_fs.existsSync(base)) {
+            const entries = _fs.readdirSync(base);
+            const hasPackaged = entries.includes('Proxima');
+            const hasDev = entries.includes('proxima');
+            if (hasPackaged && !hasDev) return packagedDir;
+            if (hasDev && !hasPackaged) return devDir;
+            if (hasPackaged && hasDev) {
+                return _fs.statSync(packagedDir).mtimeMs > _fs.statSync(devDir).mtimeMs ? packagedDir : devDir;
+            }
+        }
+    } catch {}
+    return devDir;
+}
+
 function getApiKeyPath() {
-    const { app } = require('electron');
-    return _path.join(app.getPath('userData'), 'api-key.json');
+    return _path.join(getUserDataPath(), 'api-key.json');
+}
+
+function getRestPortFilePath() {
+    return _path.join(getUserDataPath(), 'rest-port.json');
 }
 
 let _apiKeyCache;
@@ -97,7 +134,7 @@ function validateApiKey(req) {
     return validateToken(token);
 }
 
-// Validate WebSocket handshake authorization using either headers or query parameters.
+// WebSocket handshake auth
 function isWsAuthorized(req, url) {
     const keyData = loadApiKey();
     if (!keyData) return true;
@@ -112,7 +149,34 @@ function isWsAuthorized(req, url) {
     return validateToken(token);
 }
 
-// Validate client origin for CSRF/drive-by protection.
+function getApprovedOrigins() {
+    const list = new Set();
+    const webPort = parseInt(process.env.PROXIMA_WEB_PORT, 10) || 8500;
+    list.add(`http://localhost:${webPort}`);
+    list.add(`http://127.0.0.1:${webPort}`);
+    list.add(`http://[::1]:${webPort}`);
+
+    if (process.env.PROXIMA_ALLOWED_ORIGINS) {
+        for (const item of process.env.PROXIMA_ALLOWED_ORIGINS.split(',')) {
+            const trimmed = item.trim();
+            if (!trimmed) continue;
+            try {
+                const u = new URL(trimmed);
+                list.add(`${u.protocol}//${u.host}`);
+            } catch {
+                const p = parseInt(trimmed, 10);
+                if (Number.isInteger(p) && p > 0 && p <= 65535) {
+                    list.add(`http://localhost:${p}`);
+                    list.add(`http://127.0.0.1:${p}`);
+                    list.add(`http://[::1]:${p}`);
+                }
+            }
+        }
+    }
+    return list;
+}
+
+// CSRF origin check
 function isAllowedOrigin(req) {
     const origin = req.headers['origin'];
     if (!origin) return true;
@@ -122,15 +186,22 @@ function isAllowedOrigin(req) {
         const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
         if (!isLoopback) return false;
 
-        // Restrict origin port to matching local server port for secure loopback validation.
         const serverPort = req.socket && req.socket.localPort;
-        if (serverPort) {
-            const originPort = u.port
-                ? parseInt(u.port, 10)
-                : (u.protocol === 'https:' ? 443 : 80);
-            if (originPort !== serverPort) return false;
+        const originPort = u.port
+            ? parseInt(u.port, 10)
+            : (u.protocol === 'https:' ? 443 : 80);
+
+        if (serverPort && originPort === serverPort) {
+            return true;
         }
-        return true;
+
+        const approved = getApprovedOrigins();
+        const originNormalized = `${u.protocol}//${u.host}`;
+        if (approved.has(originNormalized)) {
+            return true;
+        }
+
+        return false;
     } catch {
         return false;
     }
@@ -142,8 +213,8 @@ function corsHeaders(req) {
     return {
         'Access-Control-Allow-Origin': allowOrigin,
         'Vary': 'Origin',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, x-provider-key',
     };
 }
 
@@ -241,22 +312,46 @@ function resolveModel(m) {
 
     const lower = clean.toLowerCase();
     
-    if (lower.startsWith('gemini:')) {
+    if (lower.startsWith('chatgpt:')) {
         const sub = lower.split(':')[1];
-        if (['3.5-flash', '3.1-pro', '3.1-flash-lite', 'auto'].includes(sub)) {
-            return 'gemini:' + sub;
-        }
+        if (sub === 'auto' || sub === 'default') return 'chatgpt:auto';
+        if (sub === 'thinking' || sub === 'reasoning') return 'chatgpt:thinking';
+        if (sub === 'instant') return 'chatgpt:instant';
+        if (sub === 'mini') return 'chatgpt:mini';
+        return 'chatgpt:' + sub;
+    }
+
+    if (lower.startsWith('chatgpt-') || lower.startsWith('gpt-')) {
+        const suffix = lower.startsWith('chatgpt-') ? lower.replace('chatgpt-', '') : lower;
+        if (suffix === 'latest') return 'chatgpt';
+        if (suffix === 'auto' || suffix === 'default') return 'chatgpt:auto';
+        if (suffix === 'thinking' || suffix === 'reasoning') return 'chatgpt:thinking';
+        if (suffix === 'instant') return 'chatgpt:instant';
+        if (suffix === 'mini') return 'chatgpt:mini';
+        return 'chatgpt:' + suffix;
+    }
+
+    if (lower.startsWith('gemini:')) {
+        const sub = lower.slice('gemini:'.length);
+        return 'gemini:' + sub;
     }
     
-    if (['3.5-flash', '3.1-pro', '3.1-flash-lite'].includes(lower)) {
-        return 'gemini:' + lower;
+    if (lower === 'latest') {
+        return 'gemini:latest';
+    }
+    if (lower === 'flash') {
+        return 'gemini:flash';
+    }
+    if (lower === 'pro') {
+        return 'gemini:pro';
+    }
+    if (lower === 'argon') {
+        return 'gemini:argon';
     }
     
     if (lower.startsWith('gemini-')) {
-        const suffix = lower.replace('gemini-', '');
-        if (['3.5-flash', '3.1-pro', '3.1-flash-lite', 'auto'].includes(suffix)) {
-            return 'gemini:' + suffix;
-        }
+        const suffix = lower.slice('gemini-'.length);
+        return 'gemini:' + suffix;
     }
     
     if (lower === 'gemini') {
@@ -270,7 +365,11 @@ function resolveModels(modelField, byokKey = null) {
     const enabled = getEnabled();
 
     function _parseResolved(resolvedStr) {
+<<<<<<< HEAD
         let baseProvider, gemini = null, byokModelId = null, effort = null;
+=======
+        let baseProvider, gemini = null, chatgpt = null, byokModelId = null;
+>>>>>>> origin/main
 
         if (resolvedStr.includes('@')) {
             const atIdx = resolvedStr.indexOf('@');
@@ -279,6 +378,7 @@ function resolveModels(modelField, byokKey = null) {
         } else {
             const parts = resolvedStr.split(':');
             baseProvider = parts[0];
+<<<<<<< HEAD
             gemini = parts[1] || null;
             // parts[2] is the thinking-effort suffix used by the browser
             // providers (zai:kimi/deepseek) — e.g. "zai:glm-4.7:thinking".
@@ -286,6 +386,16 @@ function resolveModels(modelField, byokKey = null) {
         }
 
         return { baseProvider, gemini, byokModelId, effort };
+=======
+            if (baseProvider === 'gemini') gemini = parts.slice(1).join(':') || null;
+            if (baseProvider === 'chatgpt') {
+                chatgpt = parts.slice(1).join(':') || null;
+                gemini = parts.slice(1).join(':') || null; // Backward compatibility with callers treating .gemini as generic engine slot
+            }
+        }
+
+        return { baseProvider, gemini, chatgpt, byokModelId };
+>>>>>>> origin/main
     }
 
     if (Array.isArray(modelField)) {
@@ -304,30 +414,37 @@ function resolveModels(modelField, byokKey = null) {
         });
         if (resolved.length === 0) return { mode: 'error', providers: [], error: `None of [${modelField.join(', ')}] available` };
         const geminis = resolved.map(r => r.gemini);
+        const chatgpts = resolved.map(r => r.chatgpt);
         const byokModelIds = resolved.map(r => r.byokModelId);
         return {
             mode: resolved.length === 1 ? 'single' : 'multi',
             providers: resolved.map(r => r.baseProvider),
             gemini: geminis[0] || null,
             geminis,
+            chatgpt: chatgpts[0] || null,
+            chatgpts,
             byokModelId: byokModelIds[0] || null,
             byokModelIds,
         };
     }
     const resolved = resolveModel(modelField);
-    if (resolved === 'all') return { mode: 'all', providers: enabled, gemini: null, geminis: enabled.map(() => null), byokModelId: null, byokModelIds: enabled.map(() => null) };
+    if (resolved === 'all') return { mode: 'all', providers: enabled, gemini: null, geminis: enabled.map(() => null), chatgpt: null, chatgpts: enabled.map(() => null), byokModelId: null, byokModelIds: enabled.map(() => null) };
     if (resolved === 'auto') {
         const best = pickBestProvider();
-        return best ? { mode: 'single', providers: [best], gemini: null, geminis: [null], byokModelId: null, byokModelIds: [null] } : { mode: 'error', providers: [], error: 'No providers available' };
+        return best ? { mode: 'single', providers: [best], gemini: null, geminis: [null], chatgpt: null, chatgpts: [null], byokModelId: null, byokModelIds: [null] } : { mode: 'error', providers: [], error: 'No providers available' };
     }
     const parsed = _parseResolved(resolved);
     if (enabled.includes(parsed.baseProvider) || (byokKey && byok.keys.VALID_PROVIDERS.includes(parsed.baseProvider))) {
+<<<<<<< HEAD
         return { mode: 'single', providers: [parsed.baseProvider], gemini: parsed.gemini, geminis: [parsed.gemini], byokModelId: parsed.byokModelId, byokModelIds: [parsed.byokModelId], effort: parsed.effort };
+=======
+        return { mode: 'single', providers: [parsed.baseProvider], gemini: parsed.gemini, geminis: [parsed.gemini], chatgpt: parsed.chatgpt, chatgpts: [parsed.chatgpt], byokModelId: parsed.byokModelId, byokModelIds: [parsed.byokModelId] };
+>>>>>>> origin/main
     }
     return { mode: 'error', providers: [], error: `"${modelField}" not available. Enabled: ${enabled.join(', ')}` };
 }
 
-// Mirror SmartRouter logic to dynamically skip degraded providers based on recent error rate.
+// Skip degraded providers
 function _isDegraded(providerName) {
     const p = stats.providers[providerName];
     if (!p || p.totalCalls < 3) return false;
@@ -338,11 +455,11 @@ function _isDegraded(providerName) {
 function pickBestProvider(preferred) {
     const enabled = getEnabled();
     if (preferred && preferred !== 'auto') {
-        // Normalize preferred model to base provider name.
+        // Normalize provider name
         let base = String(preferred).toLowerCase().trim();
         if (base.includes('@')) base = base.slice(0, base.indexOf('@'));
         else if (base.includes(':')) base = base.slice(0, base.indexOf(':'));
-        if (['3.5-flash', '3.1-pro', '3.1-flash-lite'].includes(base) || base.startsWith('gemini')) {
+        if (['latest', 'flash', 'pro', 'argon'].includes(base) || base.startsWith('gemini')) {
             base = 'gemini';
         }
         return enabled.includes(base) ? base : null;
@@ -365,8 +482,12 @@ function extractMessage(body) {
     return body.message || body.query || body.prompt || body.content || body.text || body.question || null;
 }
 
+<<<<<<< HEAD
 async function queryProvider(provider, messageOrMessages, filePath = null, gemini = null, onChunk = null, conversationId = null, byokKey = null, tools = null, byokModelId = null) {
     console.log('[QUERY-ENTRY] provider=' + provider);
+=======
+async function queryProvider(provider, messageOrMessages, filePath = null, gemini = null, onChunk = null, conversationId = null, byokKey = null, tools = null, byokModelId = null, chatgpt = null, thinking_level = null) {
+>>>>>>> origin/main
     const effectiveKey = byokKey || (byok.keys.isEnabled() ? byok.keys.getKey(provider) : null);
     if (effectiveKey) {
         initProviderStats(provider);
@@ -406,7 +527,7 @@ async function queryProvider(provider, messageOrMessages, filePath = null, gemin
     initProviderStats(provider); const start = Date.now();
     console.log('[QUERY-DEBUG] provider=' + provider + ' hasByokKey=' + !!effectiveKey);
     try {
-        const sendResult = await handleMCPRequest({ action: 'sendMessage', provider, data: { message: messageOrMessages, filePath, gemini, onChunk, conversationId } });
+        const sendResult = await handleMCPRequest({ action: 'sendMessage', provider, data: { message: messageOrMessages, filePath, gemini, chatgpt, onChunk, conversationId, thinking_level } });
         if (!sendResult.success) throw new Error(sendResult.error || `Failed to send to ${provider}`);
 
         let responseText = (sendResult.response && sendResult.response.length > 0) ? sendResult.response : '';
@@ -472,6 +593,8 @@ function formatAllResponse(allResults) {
 }
 
 const { createRouteHandler } = require('./routes.cjs');
+const getBoundPort = () => (httpServer && httpServer.address() && typeof httpServer.address().port === 'number' ? httpServer.address().port : null);
+
 const handleRoute = createRouteHandler({
     API_PREFIX, VERSION, MODEL_ALIASES,
     sendJSON, sendError, getEnabled, resolveModel, resolveModels, pickBestProvider, extractMessage,
@@ -481,6 +604,7 @@ const handleRoute = createRouteHandler({
     scrapeUrl, searchDDG, formatResultsMarkdown,
     buildToolCallingPrompt, parseToolCallResponse, formatToolCallResponse,
     byok,
+    getBoundPort,
 });
 
 let agentUiProcess = null;
@@ -489,8 +613,10 @@ const pythonEnv = require('../python-env.cjs');
 
 function getPythonExecutable() {
     const resolved = pythonEnv.resolveInterpreter();
-    if (resolved) return resolved;
-    return process.platform === 'win32' ? 'python' : 'python3';
+    if (resolved && pythonEnv.isInterpreterUsable(resolved, true)) return resolved;
+    const ready = pythonEnv.getReadyInterpreter();
+    if (ready && pythonEnv.isInterpreterUsable(ready, true)) return ready;
+    return null;
 }
 
 function getAgentWorkingDir() {
@@ -501,15 +627,19 @@ function getAgentWorkingDir() {
 function startAgentUiServer() {
     if (agentUiProcess) {
         console.log('[Agent Web UI] Server already running');
-        return;
+        return agentUiProcess;
     }
     
     const pyExe = getPythonExecutable();
+    if (!pyExe) {
+        console.warn('[Agent Web UI] No operational Python environment with proxima_agent found. Web UI will not be started.');
+        return null;
+    }
     const agentDir = getAgentWorkingDir();
     
     console.log(`[Agent Web UI] Spawning Web UI server using Python: ${pyExe}`);
     
-    agentUiProcess = spawn(pyExe, ['-m', 'proxima_agent.web'], {
+    const proc = spawn(pyExe, ['-m', 'proxima_agent.web'], {
         cwd: agentDir,
         env: (() => {
             const env = { ...process.env };
@@ -521,31 +651,74 @@ function startAgentUiServer() {
         })()
     });
     
-    agentUiProcess.stdout.on('data', (data) => {
+    agentUiProcess = proc;
+
+    proc.stdout.on('data', (data) => {
         console.log(`[Agent Web UI stdout] ${data.toString().trim()}`);
     });
     
-    agentUiProcess.stderr.on('data', (data) => {
+    proc.stderr.on('data', (data) => {
         console.error(`[Agent Web UI stderr] ${data.toString().trim()}`);
     });
     
-    agentUiProcess.on('close', (code) => {
+    proc.on('close', (code) => {
         console.log(`[Agent Web UI] Process exited with code ${code}`);
-        agentUiProcess = null;
+        if (agentUiProcess === proc) agentUiProcess = null;
     });
 
-    agentUiProcess.on('error', (err) => {
+    proc.on('error', (err) => {
         console.error('[Agent Web UI] Failed to spawn process:', err.message);
-        agentUiProcess = null;
+        if (agentUiProcess === proc) agentUiProcess = null;
     });
+
+    return proc;
 }
 
 function stopAgentUiServer() {
     if (agentUiProcess) {
         console.log('[Agent Web UI] Stopping Web UI server...');
-        agentUiProcess.kill();
+        const p = agentUiProcess;
         agentUiProcess = null;
+        try {
+            p.kill('SIGTERM');
+        } catch {}
     }
+}
+
+function waitForAgentReadiness(proc, timeoutMs = 5000, port = 8500) {
+    return new Promise((resolve, reject) => {
+        if (!proc) return reject(new Error('No agent process provided'));
+        let exited = false;
+        let exitCode = null;
+
+        const onExit = (code) => {
+            exited = true;
+            exitCode = code;
+        };
+        proc.once('exit', onExit);
+
+        const startTime = Date.now();
+        const interval = setInterval(() => {
+            if (exited) {
+                clearInterval(interval);
+                proc.removeListener('exit', onExit);
+                return reject(new Error(`Agent process exited early with code ${exitCode}`));
+            }
+            if (Date.now() - startTime > timeoutMs) {
+                clearInterval(interval);
+                proc.removeListener('exit', onExit);
+                return reject(new Error(`Agent startup timed out after ${timeoutMs}ms`));
+            }
+            const req = http.get(`http://127.0.0.1:${port}/`, (res) => {
+                clearInterval(interval);
+                proc.removeListener('exit', onExit);
+                res.resume();
+                resolve(true);
+            });
+            req.on('error', () => {});
+        }, 150);
+        if (interval.unref) interval.unref();
+    });
 }
 
 process.on('exit', () => {
@@ -565,6 +738,9 @@ function startRestAPI() {
         res._proximaCors = corsHeaders(req);
 
         if (req.method === 'OPTIONS') {
+            if (!isAllowedOrigin(req)) {
+                return sendError(res, 403, 'Cross-origin requests are not allowed', 'forbidden');
+            }
             res.writeHead(204, { ...res._proximaCors, 'Access-Control-Max-Age': '86400' });
             return res.end();
         }
@@ -582,7 +758,7 @@ function startRestAPI() {
             const body = req.method === 'POST' ? await parseBody(req) : {};
             const providerKey = (req.headers['x-provider-key'] || '').trim();
             if (providerKey) body._byokKey = providerKey;
-            await handleRoute(req.method, url.pathname, body, res);
+            await handleRoute(req.method, url.pathname, body, res, req);
         } catch (err) { console.error('[API] Error:', err.message); if (!res.headersSent) sendError(res, err.statusCode || 500, err.message); }
     });
 
@@ -590,6 +766,14 @@ function startRestAPI() {
         stats.startTime = new Date();
         const boundPort = (httpServer.address() && httpServer.address().port) || REST_PORT;
         console.log(`[API] Proxima API v${VERSION} at http://localhost:${boundPort}`);
+        try {
+            const portFile = getRestPortFilePath();
+            const portDir = _path.dirname(portFile);
+            if (!_fs.existsSync(portDir)) _fs.mkdirSync(portDir, { recursive: true });
+            _fs.writeFileSync(portFile, JSON.stringify({ port: boundPort, pid: process.pid, updatedAt: Date.now() }));
+        } catch (e) {
+            console.error('[API] Could not write rest-port.json:', e.message);
+        }
         try { initWebSocket(httpServer, handleMCPRequest, getEnabled, { isAllowedOrigin, isWsAuthorized }); console.log(`[API] WebSocket at ws://localhost:${boundPort}/ws`); }
         catch (err) { console.error('[API] WebSocket init failed:', err.message); }
     };
@@ -597,7 +781,8 @@ function startRestAPI() {
     const MAX_PORT_ATTEMPTS = 20;
     let _portAttempt = 0;
 
-    httpServer.listen(REST_PORT, '127.0.0.1', onListening);
+    httpServer.once('listening', onListening);
+    httpServer.listen(REST_PORT, '127.0.0.1');
 
     httpServer.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
@@ -606,7 +791,7 @@ function startRestAPI() {
                 _portAttempt++;
                 const nextPort = REST_PORT + _portAttempt;
                 console.error(`[API] Port ${busyPort} in use, trying ${nextPort}`);
-                httpServer.listen(nextPort, '127.0.0.1', onListening);
+                httpServer.listen(nextPort, '127.0.0.1');
             } else {
                 console.error(`[API] Could not bind any port in range ${REST_PORT}-${REST_PORT + MAX_PORT_ATTEMPTS}. Giving up.`);
             }
@@ -624,6 +809,19 @@ function stopRestAPI() {
         console.error('[Agent Web UI] Failed to stop:', err.message);
     }
     try { closeWebSocket(); } catch (err) { console.error('[API] WS close failed:', err.message); }
+    try {
+        const portFile = getRestPortFilePath();
+        if (_fs.existsSync(portFile)) {
+            try {
+                const data = JSON.parse(_fs.readFileSync(portFile, 'utf8'));
+                if (data && data.pid === process.pid) {
+                    _fs.unlinkSync(portFile);
+                }
+            } catch {
+                _fs.unlinkSync(portFile);
+            }
+        }
+    } catch (e) {}
     if (httpServer) {
         httpServer.close(() => console.log('[API] Stopped'));
         httpServer = null;
@@ -631,4 +829,26 @@ function stopRestAPI() {
 }
 function isRestAPIRunning() { return httpServer !== null && httpServer.listening; }
 
-module.exports = { initRestAPI, startRestAPI, stopRestAPI, isRestAPIRunning, generateApiKey, revokeApiKey, loadApiKey, byok };
+module.exports = {
+    initRestAPI,
+    startRestAPI,
+    stopRestAPI,
+    isRestAPIRunning,
+    generateApiKey,
+    revokeApiKey,
+    loadApiKey,
+    byok,
+    getPythonExecutable,
+    startAgentUiServer,
+    stopAgentUiServer,
+    waitForAgentReadiness,
+    getRestPortFilePath,
+    getUserDataPath,
+    isAllowedOrigin,
+    getApprovedOrigins,
+    getBoundPort,
+    resolveModel,
+    resolveModels,
+    pickBestProvider,
+    extractMessage,
+};
